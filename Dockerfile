@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY Ledger.sln ./
+COPY Ledger.slnx ./
 COPY src/Ledger.Domain/Ledger.Domain.csproj src/Ledger.Domain/
 COPY src/Ledger.Application/Ledger.Application.csproj src/Ledger.Application/
 COPY src/Ledger.Infrastructure/Ledger.Infrastructure.csproj src/Ledger.Infrastructure/
