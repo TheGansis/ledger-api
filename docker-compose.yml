@@ -38,7 +38,7 @@ services:
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     environment:
-      ConnectionStrings__Ledger: "Host=postgres;Port=5432;Database=ledger;Username=ledger;Password=ledger"
+      ConnectionStrings__Ledger: "Host=postgres;Port=5432;Database=ledger;Username=ledger;Password=ledger;Maximum Pool Size=80"
       ConnectionStrings__Redis: "redis:6379"
       RabbitMq__Host: rabbitmq
       ASPNETCORE_URLS: "http://+:8080"
