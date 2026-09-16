@@ -1,6 +1,7 @@
 using FluentValidation;
 using Ledger.Application.Abstractions;
 using Ledger.Application.Common;
+using Ledger.Application.Events;
 using Ledger.Domain.Accounts;
 using Ledger.Domain.Common;
 using Ledger.Domain.Transactions;
@@ -33,7 +34,7 @@ public sealed class TransferValidator : AbstractValidator<TransferRequest>
 ///    либо упадёт на unique-индексе — оба случая обработаны);
 /// 3) применяем доменную операцию, сохраняем транзакцию + проводки + балансы атомарно.
 /// </summary>
-public sealed class TransactionService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock)
+public sealed class TransactionService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock, IOutbox outbox, IAccountCache cache)
 {
     public Task<TransactionResult> DepositAsync(string key, Guid accountId, MoneyOperationRequest req, CancellationToken ct) =>
         RunAsync(key, [accountId], Fingerprint("deposit", accountId, req.Amount), locked =>
@@ -70,7 +71,7 @@ public sealed class TransactionService(IAccountRepository accounts, ITransaction
         var existing = await transactions.FindByIdempotencyKeyAsync(key, ct);
         if (existing is not null) return Replay(existing, fingerprint);
 
-        return await uow.ExecuteInTransactionAsync(async token =>
+        var result = await uow.ExecuteInTransactionAsync(async token =>
         {
             var locked = await accounts.GetForUpdateAsync(accountIds, token);
 
@@ -81,9 +82,20 @@ public sealed class TransactionService(IAccountRepository accounts, ITransaction
             var transaction = operation(locked);
             transaction.SetFingerprint(fingerprint);
             transactions.Add(transaction);
+
+            // Событие — в той же транзакции, что и проводки (outbox).
+            var evt = new TransactionRecordedEvent(1, transaction.Id, transaction.Type.ToString(), transaction.Status.ToString(),
+                transaction.Amount, transaction.Currency, transaction.FromAccountId, transaction.ToAccountId,
+                transaction.RejectionCode, transaction.CreatedAt);
+            outbox.Enqueue(evt.Route, evt);
+
             await uow.SaveChangesAsync(token);
             return new TransactionResult(TransactionDto.From(transaction), Replayed: false);
         }, ct);
+
+        // Инвалидация после коммита: если сделать до — параллельный читатель успеет положить в кэш старый баланс.
+        if (!result.Replayed) await cache.InvalidateAsync(accountIds, ct);
+        return result;
     }
 
     private static TransactionResult Replay(Transaction existing, string fingerprint)

@@ -14,7 +14,7 @@ public sealed class OpenAccountValidator : AbstractValidator<OpenAccountRequest>
     }
 }
 
-public sealed class AccountService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock)
+public sealed class AccountService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock, IAccountCache cache)
 {
     public async Task<AccountDto> OpenAsync(OpenAccountRequest request, CancellationToken ct)
     {
@@ -26,8 +26,12 @@ public sealed class AccountService(IAccountRepository accounts, ITransactionRepo
 
     public async Task<AccountDto?> GetAsync(Guid id, CancellationToken ct)
     {
+        if (await cache.GetAsync(id, ct) is { } cached) return cached;
         var account = await accounts.FindAsync(id, ct);
-        return account is null ? null : AccountDto.From(account);
+        if (account is null) return null;
+        var dto = AccountDto.From(account);
+        await cache.SetAsync(dto, ct);
+        return dto;
     }
 
     public async Task<Page<LedgerEntryDto>?> GetStatementAsync(Guid id, string? cursor, int limit, CancellationToken ct)
@@ -40,7 +44,7 @@ public sealed class AccountService(IAccountRepository accounts, ITransactionRepo
 
     public async Task<AccountDto?> SetStatusAsync(Guid id, AccountStatus status, CancellationToken ct)
     {
-        return await uow.ExecuteInTransactionAsync(async token =>
+        var dto = await uow.ExecuteInTransactionAsync(async token =>
         {
             var locked = await accounts.GetForUpdateAsync([id], token);
             if (!locked.TryGetValue(id, out var account)) return null;
@@ -53,5 +57,7 @@ public sealed class AccountService(IAccountRepository accounts, ITransactionRepo
             await uow.SaveChangesAsync(token);
             return AccountDto.From(account);
         }, ct);
+        if (dto is not null) await cache.InvalidateAsync([id], ct);
+        return dto;
     }
 }

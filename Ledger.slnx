@@ -4,6 +4,7 @@
     <Project Path="src/Ledger.Application/Ledger.Application.csproj" />
     <Project Path="src/Ledger.Domain/Ledger.Domain.csproj" />
     <Project Path="src/Ledger.Infrastructure/Ledger.Infrastructure.csproj" />
+    <Project Path="src/Ledger.Notifications/Ledger.Notifications.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Ledger.Api.Tests/Ledger.Api.Tests.csproj" />
