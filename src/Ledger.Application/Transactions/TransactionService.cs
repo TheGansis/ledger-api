@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentValidation;
 using Ledger.Application.Abstractions;
 using Ledger.Application.Common;
@@ -34,12 +35,13 @@ public sealed class TransferValidator : AbstractValidator<TransferRequest>
 ///    либо упадёт на unique-индексе — оба случая обработаны);
 /// 3) применяем доменную операцию, сохраняем транзакцию + проводки + балансы атомарно.
 /// </summary>
-public sealed class TransactionService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock, IOutbox outbox, IAccountCache cache)
+public sealed class TransactionService(IAccountRepository accounts, ITransactionRepository transactions, IUnitOfWork uow, IClock clock, IOutbox outbox, IAccountCache cache, ICurrentUser user)
 {
     public Task<TransactionResult> DepositAsync(string key, Guid accountId, MoneyOperationRequest req, CancellationToken ct) =>
         RunAsync(key, [accountId], Fingerprint("deposit", accountId, req.Amount), locked =>
         {
             var to = Require(locked, accountId);
+            EnsureOwner(to); // пополнить можно только свой счёт (или админ — любой)
             return Transaction.Deposit(key, to, Money.Of(req.Amount, to.Currency), clock.UtcNow);
         }, ct);
 
@@ -47,6 +49,7 @@ public sealed class TransactionService(IAccountRepository accounts, ITransaction
         RunAsync(key, [accountId], Fingerprint("withdraw", accountId, req.Amount), locked =>
         {
             var from = Require(locked, accountId);
+            EnsureOwner(from);
             return Transaction.Withdraw(key, from, Money.Of(req.Amount, from.Currency), clock.UtcNow);
         }, ct);
 
@@ -55,21 +58,42 @@ public sealed class TransactionService(IAccountRepository accounts, ITransaction
         {
             var from = Require(locked, req.FromAccountId);
             var to = Require(locked, req.ToAccountId);
+            EnsureOwner(from); // получатель может быть чужим — это и есть перевод
             return Transaction.Transfer(key, from, to, Money.Of(req.Amount, from.Currency), clock.UtcNow);
         }, ct);
 
     public async Task<TransactionDto?> GetAsync(Guid id, CancellationToken ct)
     {
         var t = await transactions.FindAsync(id, ct);
-        return t is null ? null : TransactionDto.From(t);
+        if (t is null) return null;
+        if (!user.IsAdmin)
+        {
+            // Участник транзакции — владелец любого из её счетов.
+            var ids = new[] { t.FromAccountId, t.ToAccountId }.Where(x => x.HasValue).Select(x => x!.Value).ToArray();
+            var involved = false;
+            foreach (var id2 in ids)
+                if (await accounts.FindAsync(id2, ct) is { } a && a.IsOwnedBy(user.Subject)) { involved = true; break; }
+            if (!involved) throw new ForbiddenException("Transaction belongs to other accounts.");
+        }
+        return TransactionDto.From(t);
     }
 
     private async Task<TransactionResult> RunAsync(string key, Guid[] accountIds, string fingerprint,
         Func<IReadOnlyDictionary<Guid, Account>, Transaction> operation, CancellationToken ct)
     {
+        var opType = fingerprint[..fingerprint.IndexOf('|')];
+        using var activity = LedgerMetrics.ActivitySource.StartActivity($"ledger.{opType}");
+        activity?.SetTag("ledger.idempotency_key", key);
+        var sw = Stopwatch.StartNew();
+
         // Быстрый путь: повтор уже завершённого запроса не должен брать блокировки.
         var existing = await transactions.FindByIdempotencyKeyAsync(key, ct);
-        if (existing is not null) return Replay(existing, fingerprint);
+        if (existing is not null)
+        {
+            var replay = Replay(existing, fingerprint);
+            LedgerMetrics.OperationCompleted(opType, sw.Elapsed.TotalMilliseconds, replayed: true);
+            return replay;
+        }
 
         var result = await uow.ExecuteInTransactionAsync(async token =>
         {
@@ -94,14 +118,31 @@ public sealed class TransactionService(IAccountRepository accounts, ITransaction
         }, ct);
 
         // Инвалидация после коммита: если сделать до — параллельный читатель успеет положить в кэш старый баланс.
-        if (!result.Replayed) await cache.InvalidateAsync(accountIds, ct);
+        if (!result.Replayed)
+        {
+            await cache.InvalidateAsync(accountIds, ct);
+            LedgerMetrics.TransactionRecorded(result.Transaction.Type, result.Transaction.Status, result.Transaction.RejectionCode);
+        }
+        activity?.SetTag("ledger.transaction_id", result.Transaction.Id);
+        activity?.SetTag("ledger.status", result.Transaction.Status);
+        LedgerMetrics.OperationCompleted(opType, sw.Elapsed.TotalMilliseconds, result.Replayed);
         return result;
+    }
+
+    private void EnsureOwner(Account account)
+    {
+        if (!user.IsAdmin && !account.IsOwnedBy(user.Subject))
+            throw new ForbiddenException($"Account {account.Id} belongs to another owner.");
     }
 
     private static TransactionResult Replay(Transaction existing, string fingerprint)
     {
         if (existing.RequestFingerprint != fingerprint)
+        {
+            LedgerMetrics.Conflict();
             throw new IdempotencyConflictException(existing.IdempotencyKey);
+        }
+        LedgerMetrics.Replayed();
         return new TransactionResult(TransactionDto.From(existing), Replayed: true);
     }
 

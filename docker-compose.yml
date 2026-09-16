@@ -42,7 +42,20 @@ services:
       ConnectionStrings__Redis: "redis:6379"
       RabbitMq__Host: rabbitmq
       ASPNETCORE_URLS: "http://+:8080"
+      Jwt__DevTokenEndpoint: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
     ports: ["8080:8080"]
+
+  # Наблюдаемость: трейсы в Jaeger (http://localhost:16686), метрики в Prometheus (http://localhost:9090)
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    ports: ["16686:16686", "4317:4317"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes: ["./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
 
   notifications:
     build: { context: ., dockerfile: Dockerfile, target: notifications }

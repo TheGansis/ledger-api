@@ -11,7 +11,9 @@ public sealed class AccountConfiguration : IEntityTypeConfiguration<Account>
         b.ToTable("accounts");
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).HasColumnName("id");
+        b.Property(x => x.OwnerId).HasColumnName("owner_id").HasMaxLength(128).IsRequired();
         b.Property(x => x.OwnerName).HasColumnName("owner_name").HasMaxLength(200).IsRequired();
+        b.HasIndex(x => x.OwnerId).HasDatabaseName("ix_accounts_owner");
         b.Property(x => x.Currency).HasColumnName("currency").HasMaxLength(3).IsFixedLength().IsRequired();
         b.Property(x => x.Balance).HasColumnName("balance").HasPrecision(19, 4);
         b.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(16);

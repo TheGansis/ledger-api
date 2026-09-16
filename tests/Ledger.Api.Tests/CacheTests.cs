@@ -7,7 +7,7 @@ namespace Ledger.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class CacheTests(LedgerApiFactory factory)
 {
-    private readonly HttpClient _http = factory.CreateClient();
+    private readonly HttpClient _http = factory.CreateClientFor("user-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
     public async Task Get_populates_cache_and_money_operation_invalidates_it()
@@ -47,7 +47,7 @@ public class CacheTests(LedgerApiFactory factory)
     {
         var a = await _http.OpenAccountAsync("A");
         await _http.GetAccountAsync(a.Id);
-        await _http.PostAsync($"/api/accounts/{a.Id}/freeze", null);
+        await factory.CreateClientFor("admin-1", "admin").PostAsync($"/api/accounts/{a.Id}/freeze", null);
         Assert.Equal("Frozen", (await _http.GetAccountAsync(a.Id)).Status);
     }
 }

@@ -11,9 +11,10 @@ public sealed class Account
 {
     private Account() { } // EF Core
 
-    private Account(Guid id, string ownerName, string currency, DateTimeOffset createdAt)
+    private Account(Guid id, string ownerId, string ownerName, string currency, DateTimeOffset createdAt)
     {
         Id = id;
+        OwnerId = ownerId;
         OwnerName = ownerName;
         Currency = currency;
         Balance = 0m;
@@ -22,6 +23,9 @@ public sealed class Account
     }
 
     public Guid Id { get; private set; }
+
+    /// <summary>Субъект-владелец (claim `sub` из JWT). Доступ к счёту — только владельцу и администратору.</summary>
+    public string OwnerId { get; private set; } = null!;
     public string OwnerName { get; private set; } = null!;
     public string Currency { get; private set; } = null!;
     public decimal Balance { get; private set; }
@@ -31,13 +35,17 @@ public sealed class Account
     /// <summary>Токен оптимистичной блокировки (PostgreSQL xmin).</summary>
     public uint Version { get; private set; }
 
-    public static Account Open(string ownerName, string currency, DateTimeOffset now)
+    public static Account Open(string ownerId, string ownerName, string currency, DateTimeOffset now)
     {
+        if (string.IsNullOrWhiteSpace(ownerId))
+            throw new DomainException("owner.required", "Owner id is required.");
         if (string.IsNullOrWhiteSpace(ownerName))
             throw new DomainException("owner.required", "Owner name is required.");
         var money = Money.Of(0m, currency); // валидирует код валюты
-        return new Account(Guid.NewGuid(), ownerName.Trim(), money.Currency, now);
+        return new Account(Guid.NewGuid(), ownerId.Trim(), ownerName.Trim(), money.Currency, now);
     }
+
+    public bool IsOwnedBy(string subject) => string.Equals(OwnerId, subject, StringComparison.Ordinal);
 
     public Money BalanceMoney => new(Balance, Currency);
 

@@ -22,6 +22,8 @@ public sealed class ProblemDetailsMapping(IProblemDetailsService problemDetails)
             DomainException d => (StatusCodes.Status422UnprocessableEntity, d.Message, d.Code, null),
             AccountNotFoundException => (StatusCodes.Status404NotFound, ex.Message, "account.not_found", null),
             IdempotencyConflictException => (StatusCodes.Status409Conflict, ex.Message, "idempotency.conflict", null),
+            ForbiddenException => (StatusCodes.Status403Forbidden, ex.Message, "forbidden", null),
+            UnauthorizedAccessException => (StatusCodes.Status401Unauthorized, "Authentication required", "unauthorized", null),
             BadHttpRequestException b => (b.StatusCode, b.Message, "bad_request", null),
             _ => (StatusCodes.Status500InternalServerError, "Unexpected error", "internal", null),
         };

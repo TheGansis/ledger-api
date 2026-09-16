@@ -3,6 +3,7 @@ using Ledger.Application.Accounts;
 using Ledger.Application.Transactions;
 using Ledger.Api.Middleware;
 using Ledger.Domain.Accounts;
+using Ledger.Api.Auth;
 
 namespace Ledger.Api.Endpoints;
 
@@ -10,7 +11,7 @@ public static class AccountEndpoints
 {
     public static IEndpointRouteBuilder MapAccounts(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/accounts").WithTags("Accounts");
+        var group = app.MapGroup("/api/accounts").WithTags("Accounts").RequireAuthorization();
 
         group.MapPost("/", async (OpenAccountRequest req, IValidator<OpenAccountRequest> validator, AccountService svc, CancellationToken ct) =>
         {
@@ -33,7 +34,7 @@ public static class AccountEndpoints
             await validator.ValidateAndThrowAsync(req, ct);
             var result = await svc.DepositAsync(IdempotencyKey.Require(http), id, req, ct);
             return TransactionResponse(result);
-        }).WithSummary("Пополнить счёт (Idempotency-Key обязателен)");
+        }).WithSummary("Пополнить счёт (Idempotency-Key обязателен)").RequireRateLimiting(RateLimitPolicies.MoneyOps);
 
         group.MapPost("/{id:guid}/withdraw", async (Guid id, MoneyOperationRequest req, HttpRequest http,
             IValidator<MoneyOperationRequest> validator, TransactionService svc, CancellationToken ct) =>
@@ -41,19 +42,19 @@ public static class AccountEndpoints
             await validator.ValidateAndThrowAsync(req, ct);
             var result = await svc.WithdrawAsync(IdempotencyKey.Require(http), id, req, ct);
             return TransactionResponse(result);
-        }).WithSummary("Снять со счёта (Idempotency-Key обязателен)");
+        }).WithSummary("Снять со счёта (Idempotency-Key обязателен)").RequireRateLimiting(RateLimitPolicies.MoneyOps);
 
         group.MapPost("/{id:guid}/freeze", async (Guid id, AccountService svc, CancellationToken ct) =>
             await svc.SetStatusAsync(id, AccountStatus.Frozen, ct) is { } dto ? Results.Ok(dto) : Results.NotFound())
-            .WithSummary("Заморозить счёт");
+            .WithSummary("Заморозить счёт (admin)").RequireAuthorization(Policies.Admin);
 
         group.MapPost("/{id:guid}/unfreeze", async (Guid id, AccountService svc, CancellationToken ct) =>
             await svc.SetStatusAsync(id, AccountStatus.Active, ct) is { } dto ? Results.Ok(dto) : Results.NotFound())
-            .WithSummary("Разморозить счёт");
+            .WithSummary("Разморозить счёт (admin)").RequireAuthorization(Policies.Admin);
 
         group.MapPost("/{id:guid}/close", async (Guid id, AccountService svc, CancellationToken ct) =>
             await svc.SetStatusAsync(id, AccountStatus.Closed, ct) is { } dto ? Results.Ok(dto) : Results.NotFound())
-            .WithSummary("Закрыть счёт (только с нулевым балансом)");
+            .WithSummary("Закрыть счёт (admin, только с нулевым балансом)").RequireAuthorization(Policies.Admin);
 
         return app;
     }

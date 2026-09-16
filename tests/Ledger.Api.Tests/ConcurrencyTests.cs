@@ -9,7 +9,7 @@ namespace Ledger.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class ConcurrencyTests(LedgerApiFactory factory)
 {
-    private readonly HttpClient _http = factory.CreateClient();
+    private readonly HttpClient _http = factory.CreateClientFor("user-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
     public async Task Parallel_transfers_in_both_directions_preserve_total_and_never_deadlock()

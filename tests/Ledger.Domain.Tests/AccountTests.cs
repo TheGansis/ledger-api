@@ -10,7 +10,7 @@ public class AccountTests
     [Fact]
     public void Open_normalizes_currency_and_starts_with_zero_balance()
     {
-        var a = Account.Open("  Alice ", "rub", Now);
+        var a = Account.Open("user-1", "  Alice ", "rub", Now);
         Assert.Equal("Alice", a.OwnerName);
         Assert.Equal("RUB", a.Currency);
         Assert.Equal(0m, a.Balance);
@@ -22,12 +22,12 @@ public class AccountTests
     [InlineData("RU")]
     [InlineData("RUBL")]
     public void Open_rejects_bad_currency(string currency) =>
-        Assert.Throws<DomainException>(() => Account.Open("Alice", currency, Now));
+        Assert.Throws<DomainException>(() => Account.Open("user-1", "Alice", currency, Now));
 
     [Fact]
     public void Credit_then_debit_changes_balance()
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         a.Credit(Money.Of(100m, "RUB"));
         a.Debit(Money.Of(40.5m, "RUB"));
         Assert.Equal(59.5m, a.Balance);
@@ -36,7 +36,7 @@ public class AccountTests
     [Fact]
     public void Debit_over_balance_is_rejected_and_balance_unchanged()
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         a.Credit(Money.Of(10m, "RUB"));
         var ex = Assert.Throws<DomainException>(() => a.Debit(Money.Of(10.0001m, "RUB")));
         Assert.Equal("funds.insufficient", ex.Code);
@@ -46,7 +46,7 @@ public class AccountTests
     [Fact]
     public void Currency_mismatch_is_rejected()
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         var ex = Assert.Throws<DomainException>(() => a.Credit(Money.Of(1m, "USD")));
         Assert.Equal("currency.mismatch", ex.Code);
     }
@@ -56,7 +56,7 @@ public class AccountTests
     [InlineData(-1)]
     public void Non_positive_amounts_are_rejected(decimal amount)
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         Assert.Throws<DomainException>(() => a.Credit(Money.Of(amount, "RUB")));
         Assert.Throws<DomainException>(() => a.Debit(Money.Of(amount, "RUB")));
     }
@@ -64,7 +64,7 @@ public class AccountTests
     [Fact]
     public void Frozen_account_rejects_operations_but_can_be_unfrozen()
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         a.Freeze();
         Assert.Throws<DomainException>(() => a.Credit(Money.Of(1m, "RUB")));
         a.Unfreeze();
@@ -75,7 +75,7 @@ public class AccountTests
     [Fact]
     public void Close_requires_zero_balance()
     {
-        var a = Account.Open("Alice", "RUB", Now);
+        var a = Account.Open("user-1", "Alice", "RUB", Now);
         a.Credit(Money.Of(1m, "RUB"));
         Assert.Throws<DomainException>(a.Close);
         a.Debit(Money.Of(1m, "RUB"));

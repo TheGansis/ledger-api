@@ -7,7 +7,7 @@ namespace Ledger.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class TransfersTests(LedgerApiFactory factory)
 {
-    private readonly HttpClient _http = factory.CreateClient();
+    private readonly HttpClient _http = factory.CreateClientFor("user-" + Guid.NewGuid().ToString("N"));
 
     private async Task<(Guid from, Guid to)> TwoAccountsAsync(decimal funded)
     {

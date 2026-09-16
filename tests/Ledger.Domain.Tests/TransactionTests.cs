@@ -10,7 +10,7 @@ public class TransactionTests
 
     private static Account Funded(decimal amount)
     {
-        var a = Account.Open("X", "RUB", Now);
+        var a = Account.Open("user-1", "X", "RUB", Now);
         if (amount > 0) a.Credit(Money.Of(amount, "RUB"));
         return a;
     }

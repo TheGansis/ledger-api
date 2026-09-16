@@ -1,4 +1,5 @@
 using System.Text;
+using Ledger.Application.Common;
 using Ledger.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,7 +57,8 @@ public sealed class OutboxPublisher(IServiceScopeFactory scopes, IOptions<Rabbit
             var batch = await db.Set<OutboxMessage>()
                 .FromSqlInterpolated($"SELECT * FROM ledger.outbox_messages WHERE processed_at IS NULL ORDER BY id LIMIT {_opt.BatchSize} FOR UPDATE SKIP LOCKED")
                 .ToListAsync(ct);
-            if (batch.Count == 0) return 0;
+            if (batch.Count == 0) { LedgerMetrics.OutboxObserved(0, 0); return 0; }
+            LedgerMetrics.OutboxObserved(batch.Count, (DateTimeOffset.UtcNow - batch[0].OccurredAt).TotalSeconds);
 
             foreach (var msg in batch)
             {

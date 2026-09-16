@@ -13,7 +13,7 @@ namespace Ledger.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class OutboxTests(LedgerApiFactory factory)
 {
-    private readonly HttpClient _http = factory.CreateClient();
+    private readonly HttpClient _http = factory.CreateClientFor("user-" + Guid.NewGuid().ToString("N"));
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     // payload — jsonb: обычный LIKE к нему неприменим, ищем по JSON-полю оператором ->>.

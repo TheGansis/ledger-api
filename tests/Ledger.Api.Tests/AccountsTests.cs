@@ -9,7 +9,8 @@ namespace Ledger.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class AccountsTests(LedgerApiFactory factory)
 {
-    private readonly HttpClient _http = factory.CreateClient();
+    private readonly HttpClient _http = factory.CreateClientFor("user-" + Guid.NewGuid().ToString("N"));
+    private readonly HttpClient _admin = factory.CreateClientFor("admin-1", "admin");
 
     [Fact]
     public async Task Open_account_returns_201_with_location()
@@ -85,13 +86,13 @@ public class AccountsTests(LedgerApiFactory factory)
     public async Task Frozen_account_rejects_deposit_until_unfrozen()
     {
         var acc = await _http.OpenAccountAsync();
-        Assert.Equal(HttpStatusCode.OK, (await _http.PostAsync($"/api/accounts/{acc.Id}/freeze", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _admin.PostAsync($"/api/accounts/{acc.Id}/freeze", null)).StatusCode);
 
         var t = await (await _http.DepositAsync(acc.Id, 1m, ApiClientExtensions.Key())).AsTransactionAsync();
         Assert.Equal("Rejected", t.Status);
         Assert.Equal("account.inactive", t.RejectionCode);
 
-        Assert.Equal(HttpStatusCode.OK, (await _http.PostAsync($"/api/accounts/{acc.Id}/unfreeze", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _admin.PostAsync($"/api/accounts/{acc.Id}/unfreeze", null)).StatusCode);
         var ok = await (await _http.DepositAsync(acc.Id, 1m, ApiClientExtensions.Key())).AsTransactionAsync();
         Assert.Equal("Completed", ok.Status);
     }
@@ -101,7 +102,7 @@ public class AccountsTests(LedgerApiFactory factory)
     {
         var acc = await _http.OpenAccountAsync();
         await _http.DepositAsync(acc.Id, 1m, ApiClientExtensions.Key());
-        var resp = await _http.PostAsync($"/api/accounts/{acc.Id}/close", null);
+        var resp = await _admin.PostAsync($"/api/accounts/{acc.Id}/close", null);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, resp.StatusCode);
         Assert.Contains("account.nonzero_balance", await resp.Content.ReadAsStringAsync());
     }

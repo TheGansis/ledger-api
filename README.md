@@ -1,5 +1,7 @@
 # Ledger API
 
+[![CI](https://github.com/TheGansis/ledger-api/actions/workflows/ci.yml/badge.svg)](https://github.com/TheGansis/ledger-api/actions/workflows/ci.yml)
+
 Сервис счетов и переводов с двойной записью: ASP.NET Core 10, EF Core, PostgreSQL 16, RabbitMQ, Redis.
 
 Задача проекта — показать, как в .NET-бэкенде решаются проблемы, с которыми сталкивается любая
@@ -24,13 +26,25 @@
 - **Идемпотентный консьюмер** `Ledger.Notifications`: дедупликация по `MessageId` через Redis `SET NX`,
   ручной ack/nack, prefetch
 - **Redis cache-aside** для карточки счёта (TTL 30 с, инвалидация после коммита, деградация в БД при недоступности Redis)
+- **JWT-авторизация**: счёт принадлежит `sub` из токена; чужой счёт — `403`; заморозка/закрытие — роль `admin`;
+  dev-эндпоинт выдачи токенов для локальной работы (в проде — внешний IdP)
+- **Rate limiting** денежных операций на пользователя (fixed window, `429` + `Retry-After`)
+- **Наблюдаемость**: Serilog (JSON в проде) с `traceId`/`UserId`/`IdempotencyKey` в каждой записи;
+  OpenTelemetry-трейсы (HTTP, Npgsql, собственные span'ы операций) → Jaeger по OTLP;
+  Prometheus `/metrics` с бизнес-метриками: `ledger_transactions_total{type,status,reason}`,
+  `ledger_operation_duration`, `ledger_idempotency_replays`, `ledger_outbox_pending/lag`
 - Ошибки в формате RFC 7807 ProblemDetails с машиночитаемым полем `code`
 - Health `/health` с деталями: postgres, redis, **отставание outbox**; Swagger UI на `/swagger`
+- **CI (GitHub Actions)**: сборка, все тесты против PostgreSQL/Redis/RabbitMQ в service-контейнерах, сборка Docker-образов
 
 ## Быстрый старт
 
 ```bash
-docker compose up --build        # API http://localhost:8080/swagger, RabbitMQ UI http://localhost:15672
+docker compose up --build
+# API        http://localhost:8080/swagger
+# RabbitMQ   http://localhost:15672  (guest/guest)
+# Jaeger     http://localhost:16686  (трейсы запросов и SQL)
+# Prometheus http://localhost:9090   (ledger_* метрики)
 ```
 
 Без Docker (нужны PostgreSQL 16 с пользователем/базой `ledger`/`ledger`, Redis и RabbitMQ на localhost):
@@ -43,36 +57,39 @@ dotnet run --project src/Ledger.Notifications   # консьюмер уведо�
 ## Пример
 
 ```bash
-A=$(curl -s -X POST localhost:8080/api/accounts -H 'Content-Type: application/json' \
-   -d '{"ownerName":"Alice","currency":"RUB"}' | jq -r .id)
-B=$(curl -s -X POST localhost:8080/api/accounts -H 'Content-Type: application/json' \
-   -d '{"ownerName":"Bob","currency":"RUB"}' | jq -r .id)
+J='Content-Type: application/json'
+# токен клиента (dev-эндпоинт; роли: customer по умолчанию, admin)
+T=$(curl -s -X POST localhost:8080/api/auth/dev-token -H "$J" -d '{"subject":"alice"}' | jq -r .accessToken)
+A="Authorization: Bearer $T"
 
-curl -X POST localhost:8080/api/accounts/$A/deposit -H 'Content-Type: application/json' \
-     -H 'Idempotency-Key: dep-1' -d '{"amount":1000}'
+ACC=$(curl -s -X POST localhost:8080/api/accounts -H "$J" -H "$A" -d '{"ownerName":"Alice","currency":"RUB"}' | jq -r .id)
+curl -X POST localhost:8080/api/accounts/$ACC/deposit -H "$J" -H "$A" -H 'Idempotency-Key: dep-1' -d '{"amount":1000}'
 
-curl -X POST localhost:8080/api/transactions/transfers -H 'Content-Type: application/json' \
-     -H 'Idempotency-Key: tr-1' -d "{\"fromAccountId\":\"$A\",\"toAccountId\":\"$B\",\"amount\":300}"
+# перевод на счёт другого пользователя — со своего счёта можно, с чужого — 403
+curl -X POST localhost:8080/api/transactions/transfers -H "$J" -H "$A" -H 'Idempotency-Key: tr-1' \
+     -d "{\"fromAccountId\":\"$ACC\",\"toAccountId\":\"<id счёта Bob>\",\"amount\":300}"
 
-curl "localhost:8080/api/accounts/$A/entries?limit=20"
+curl -H "$A" "localhost:8080/api/accounts/$ACC/entries?limit=20"
+curl localhost:8080/metrics | grep ledger_
 ```
 
 ## API
 
 | Метод | Путь | Описание |
 |---|---|---|
-| POST | `/api/accounts` | Открыть счёт `{ownerName, currency}` |
+| POST | `/api/auth/dev-token` | DEV: `{subject, roles?}` → JWT |
+| POST | `/api/accounts` | Открыть счёт `{ownerName, currency, ownerId?}` (`ownerId` — только admin) |
 | GET | `/api/accounts/{id}` | Счёт |
 | GET | `/api/accounts/{id}/entries?limit&cursor` | Выписка, от новых к старым |
 | POST | `/api/accounts/{id}/deposit` | Пополнение `{amount}` + `Idempotency-Key` |
 | POST | `/api/accounts/{id}/withdraw` | Снятие `{amount}` + `Idempotency-Key` |
-| POST | `/api/accounts/{id}/freeze` · `/unfreeze` · `/close` | Смена статуса |
+| POST | `/api/accounts/{id}/freeze` · `/unfreeze` · `/close` | Смена статуса (admin) |
 | POST | `/api/transactions/transfers` | Перевод `{fromAccountId, toAccountId, amount}` + `Idempotency-Key` |
 | GET | `/api/transactions/{id}` | Транзакция |
 
 Коды ответов денежных операций: `201` — создана; `200` — повтор по ключу; `400` — валидация /
-нет ключа; `404` — счёт не найден; `409` — ключ занят другим запросом; `422` — нарушение
-бизнес-правила вне транзакции (например, закрытие счёта с остатком).
+нет ключа; `401` — нет/невалидный токен; `403` — чужой счёт или нет роли; `404` — счёт не найден;
+`409` — ключ занят другим запросом; `422` — нарушение бизнес-правила вне транзакции; `429` — лимит операций.
 
 ## Архитектура
 
@@ -81,13 +98,13 @@ src/
   Ledger.Domain          сущности и правила: Account, Transaction, LedgerEntry, Money — без зависимостей
   Ledger.Application     use-case'ы (AccountService, TransactionService), валидаторы, интерфейсы репозиториев
   Ledger.Infrastructure  EF Core, конфигурации таблиц, миграции, репозитории, UnitOfWork
-  Ledger.Api             minimal API, ProblemDetails, Swagger, health
+  Ledger.Api             minimal API, JWT, rate limiting, ProblemDetails, Swagger, health, Serilog, OpenTelemetry
   Ledger.Notifications   worker: консьюмер RabbitMQ с дедупликацией в Redis
 tests/
   Ledger.Domain.Tests    unit-тесты правил (17)
   Ledger.Api.Tests       интеграционные тесты через WebApplicationFactory поверх настоящих PostgreSQL,
-                         RabbitMQ и Redis (27): 100 встречных параллельных переводов, гонка одинаковых
-                         ключей, доставка события в брокер, инвалидация кэша
+                         RabbitMQ и Redis (38): 100 встречных параллельных переводов, гонка одинаковых
+                         ключей, доставка события в брокер, инвалидация кэша, авторизация, rate limit, метрики
 ```
 
 ## Тесты
@@ -114,5 +131,5 @@ dotnet test   # нужны база ledger_test (или LEDGER_TEST_DB), Redis �
 
 - [x] Ядро: счета, переводы, идемпотентность, блокировки, выписка, тесты
 - [x] Outbox → RabbitMQ, идемпотентный консьюмер уведомлений, Redis cache-aside
-- [ ] JWT-авторизация, Serilog, OpenTelemetry, GitHub Actions CI
+- [x] JWT-авторизация и владение счетами, rate limiting, Serilog, OpenTelemetry (Jaeger/Prometheus), GitHub Actions CI
 - [ ] Нагрузочный сценарий k6 и отчёт
